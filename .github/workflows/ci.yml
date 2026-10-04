@@ -141,7 +141,7 @@ jobs:
           uv build --wheel --out-dir dist tools/fact-check
           uv venv --python 3.13 .venv
           core=$(find dist -name 'research_core-*.whl' -print)
-          uv pip install --python .venv/bin/python --only-binary amplifier-core "${core}[agent]" pytest
+          uv pip install --python .venv/bin/python --only-binary amplifier-core "${core}[agent,perplexity]" pytest
           uv pip install --python .venv/bin/python --no-deps dist/deep_research-*.whl dist/fact_check-*.whl
           uv pip check --python .venv/bin/python
       - name: Offline real runtime and deterministic consumer checks
