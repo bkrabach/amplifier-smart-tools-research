@@ -208,6 +208,8 @@ source override is consulted. Provider/module revisions resolve at package insta
 - Public Core hooks forward tool progress and usage. Actual tool events still gate
   evidence; zero tokens and zero-tool gathers keep their existing refusals. Provider
   costs are summed only when every call reports them; absent cost remains unknown.
+  Input totals retain charged-input semantics: fresh input plus cache writes, with
+  cache reads not counted again as fresh input.
 - The existing provider selection, explicit model, turn timeout and error envelopes
   remain. Cancellation joins session cleanup before deleting scratch. Workflow state
   stays in run artifacts; no conversational authority is resumed between stages.

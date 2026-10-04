@@ -259,3 +259,75 @@ def test_actual_missing_web_mount_refuses_before_provider(private, monkeypatch):
     with pytest.raises(engine.EngineUnavailable, match="did not mount"):
         engine.run_turn("fixture", provider="openai", tools=engine.WEB_TOOLS)
     assert not list((private / "engine/work").iterdir())
+
+
+@pytest.mark.parametrize(
+    "saved",
+    [
+        {"openai": "legacy-fixture"},
+        {"openai": {"api_key": "legacy-fixture"}},
+        {"providers": {"openai": {"api_key": "legacy-fixture"}}},
+    ],
+)
+def test_legacy_credential_shapes_are_read_without_migration(private, saved):
+    home = private / "engine"
+    home.mkdir()
+    path = home / "credentials.json"
+    path.write_text(json.dumps(saved))
+    before = path.read_bytes()
+    assert runtime.provider_config("openai", home) == {"api_key": "legacy-fixture"}
+    assert runtime.configured_providers(home) == ["openai"]
+    assert path.read_bytes() == before
+
+
+def test_environment_binding_survives_broken_unrelated_saved_file(private, monkeypatch):
+    home = private / "engine"
+    home.mkdir()
+    path = home / "credentials.json"
+    path.write_text("malformed-fixture")
+    monkeypatch.setenv("OPENAI_API_KEY", "explicit-fixture")
+    assert "openai" in runtime.configured_providers(home)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-fixture")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://fixture.invalid")
+    assert "azure-openai" in runtime.configured_providers(home)
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY")
+    with pytest.raises(runtime.NoProviderError, match="unreadable or invalid"):
+        runtime.configured_providers(home)
+    assert path.read_text() == "malformed-fixture"
+
+
+def test_cached_usage_preserves_existing_charged_input_semantics(private):
+    pytest.importorskip("amplifier_core")
+    forwarded = []
+    events = runtime.Events(engine._Display(forwarded.append), private, set())
+
+    async def scenario():
+        await events.handle(
+            "llm:response",
+            {
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_write_tokens": 45320,
+                    "cache_read_tokens": 500,
+                    "output_tokens": 2,
+                    "cost_usd": "0.2",
+                }
+            },
+        )
+        await events.handle(
+            "llm:response",
+            {
+                "usage": {
+                    "input_tokens": 4,
+                    "cache_read_tokens": 1000,
+                    "output_tokens": 1,
+                    "cost_usd": "0.1",
+                }
+            },
+        )
+
+    asyncio.run(scenario())
+    assert events.tokens_in == 45327 and events.tokens_out == 3
+    assert forwarded[0]["tokens_in"] == 45323
+    assert events.cost == Decimal("0.3")

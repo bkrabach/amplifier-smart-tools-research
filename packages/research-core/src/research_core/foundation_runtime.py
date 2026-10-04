@@ -36,7 +36,16 @@ def _saved(home: Path) -> dict:
         if path.stat().st_size > 256_000:
             raise ValueError("oversize")
         value = json.loads(path.read_text(encoding="utf-8-sig"))
-        providers = value.get("providers", {}) if "version" in value else value
+        if not isinstance(value, dict):
+            raise ValueError("shape")
+        providers = (
+            value.get("providers")
+            if "providers" in value
+            else {
+                key: entry if isinstance(entry, dict) else {"api_key": str(entry)}
+                for key, entry in value.items()
+            }
+        )
         if not isinstance(providers, dict):
             raise ValueError("shape")
         return providers
@@ -77,10 +86,12 @@ def provider_config(provider: str, home: Path) -> dict | None:
         return None
     config = {"github_token" if provider == "github-copilot" else field: value}
     if provider == "azure-openai":
-        retained = _saved(home).get(provider, {})
-        endpoint = (
-            os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get("AZURE_OPENAI_BASE_URL")
-        ) or (retained.get("endpoint") if isinstance(retained, dict) else None)
+        endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get(
+            "AZURE_OPENAI_BASE_URL"
+        )
+        if not endpoint:
+            retained = _saved(home).get(provider, {})
+            endpoint = retained.get("endpoint") if isinstance(retained, dict) else None
         if endpoint:
             config["azure_endpoint"] = endpoint
     if provider in {"chat-completions", "vllm"}:
@@ -96,7 +107,18 @@ def provider_config(provider: str, home: Path) -> dict | None:
 
 
 def configured_providers(home: Path) -> list[str]:
-    return [name for name in PROVIDER_ENV if provider_config(name, home) is not None]
+    found, errors = [], []
+    for name in PROVIDER_ENV:
+        try:
+            if provider_config(name, home) is not None:
+                found.append(name)
+        except NoProviderError as error:
+            errors.append(error)
+    # A broken unrelated saved file must not hide a usable environment binding.
+    # Retain the safe diagnostic when no provider can be selected.
+    if not found and errors:
+        raise errors[0]
+    return found
 
 
 def runtime_present(provider: str) -> bool:
@@ -152,6 +174,9 @@ class Events:
             usage = data.get("usage") or {}
             inputs = int(data.get("input_tokens") or usage.get("input_tokens") or 0)
             outputs = int(data.get("output_tokens") or usage.get("output_tokens") or 0)
+            # Existing TurnResult.tokens_in reports charged input: fresh input
+            # plus cache writes; cache reads are not charged again as fresh input.
+            inputs += int(data.get("cache_write_tokens") or usage.get("cache_write_tokens") or 0)
             self.tokens_in += inputs
             self.tokens_out += outputs
             cost = usage.get("cost_usd")
